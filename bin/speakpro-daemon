@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# SpeakPro daemon entry point. Resolves through symlinks so PYTHONPATH points
+# at the actual project root regardless of how the script was invoked.
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+HERE="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+ROOT="$(cd -P "$HERE/.." && pwd)"
+
+export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+exec "${SPEAKPRO_PYTHON:-python3}" -m speakpro.daemon "$@"

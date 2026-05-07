@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+env/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Project-local runtime state lives in ~/.speakpro/, not in the repo,
+# but in case anyone symlinks or copies state files into the project:
+*.sock
+*.pid
+*.log
+*.wav
+voices/
+
+# pytest / coverage (if added later)
+.pytest_cache/
+.coverage
+htmlcov/

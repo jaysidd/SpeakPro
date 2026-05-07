@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# SpeakPro client entry point. Resolves through any symlinks so the wrapper
+# works whether invoked directly or via ~/.local/bin/speakpro.
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+HERE="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+ROOT="$(cd -P "$HERE/.." && pwd)"
+
+export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+exec "${SPEAKPRO_PYTHON:-python3}" -m speakpro "$@"
