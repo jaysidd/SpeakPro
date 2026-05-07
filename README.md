@@ -4,18 +4,18 @@
 
 > Designed to be the missing "speaker icon" you have in Claude Desktop / ChatGPT — but for the terminal.
 
-```
-   you select text in iTerm2
-              │
-              ▼
-       ⌘⌃S  (hotkey)
-              │
-              ▼
-   speakpro daemon strips code blocks,
-   ANSI escapes, tool XML, long URLs
-              │
-              ▼
-   Piper neural TTS  →  afplay  →  your speakers
+```mermaid
+flowchart LR
+    A["📝 You highlight text<br/>in iTerm2"] -->|⌘⌃S| B["🎯 macOS<br/>Shortcut"]
+    B -->|pbpaste| C["speakpro CLI"]
+    C -->|"JSON over<br/>Unix socket"| D["🧠 speakpro daemon<br/><i>strips code, ANSI,<br/>tool XML, URLs</i>"]
+    D --> E["🎙️ Piper<br/>neural TTS"]
+    E --> F["🔊 afplay<br/>→ speakers"]
+
+    style A fill:#e3f2fd,stroke:#1976d2,color:#000
+    style D fill:#f3e5f5,stroke:#7b1fa2,color:#000
+    style E fill:#e8f5e9,stroke:#388e3c,color:#000
+    style F fill:#fff3e0,stroke:#f57c00,color:#000
 ```
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -211,32 +211,105 @@ Notable voices:
 
 ## Architecture
 
-```
-iTerm2 selection ──Cmd+Ctrl+S──► macOS Shortcut ──► speak-selection.sh
-                                                          │
-                                                       pbpaste
-                                                          ▼
-                                                   speakpro speak
-                                                  (CLI client, JSON
-                                                   over Unix socket)
-                                                          │
-                                                          ▼
-                                                  speakpro daemon
-                                                 ┌──────────────────┐
-                                                 │ preprocess: drop │
-                                                 │ code, tool XML,  │
-                                                 │ ANSI, surrogates │
-                                                 ├──────────────────┤
-                                                 │ paragraph queue  │
-                                                 ├──────────────────┤
-                                                 │ TTS backend      │
-                                                 │  └─ Piper        │
-                                                 │     └─ temp WAV  │
-                                                 │        └─ afplay │
-                                                 └──────────────────┘
+### Component view
+
+```mermaid
+flowchart TB
+    subgraph INPUT["🎯 INPUT LAYER"]
+        direction LR
+        Sel["iTerm2 selection<br/>(or any Mac app)"]
+        HK["⌘⌃S hotkey<br/>(macOS Shortcut)"]
+        SH["speak-selection.sh<br/>(pbpaste shim)"]
+        Sel --> HK --> SH
+    end
+
+    subgraph CLIENT["💻 CLIENT LAYER"]
+        direction LR
+        CLI["speakpro CLI<br/><i>argparse + JSON</i>"]
+        TUI["speakpro ui<br/><i>interactive TUI</i>"]
+    end
+
+    subgraph DAEMON["🧠 DAEMON (long-lived, launchd-managed)"]
+        direction TB
+        Sock["Unix socket<br/><code>~/.speakpro/daemon.sock</code>"]
+        Pre["preprocessor<br/><i>strip code, ANSI,<br/>tool XML, surrogates</i>"]
+        Q["paragraph queue<br/><i>FIFO, skippable</i>"]
+        Worker["worker thread<br/><i>resilient to bad bytes</i>"]
+        Sock --> Pre --> Q --> Worker
+    end
+
+    subgraph BACKENDS["🎙️ TTS BACKENDS"]
+        direction LR
+        Say["macOS say<br/><i>zero install</i>"]
+        Piper["Piper neural TTS<br/><i>en_US-amy-medium etc.</i>"]
+    end
+
+    subgraph OUTPUT["🔊 AUDIO OUTPUT"]
+        AF["afplay<br/><i>SIGSTOP/SIGCONT pause</i>"]
+        Spk["🎧 speakers"]
+    end
+
+    SH --> CLI
+    TUI --> CLI
+    CLI -.->|"JSON\nover socket"| Sock
+    Worker --> Say
+    Worker --> Piper
+    Piper -->|temp WAV| AF
+    Say --> Spk
+    AF --> Spk
+
+    style INPUT fill:#e3f2fd,stroke:#1976d2
+    style CLIENT fill:#fff3e0,stroke:#f57c00
+    style DAEMON fill:#f3e5f5,stroke:#7b1fa2
+    style BACKENDS fill:#e8f5e9,stroke:#388e3c
+    style OUTPUT fill:#fce4ec,stroke:#c2185b
 ```
 
-**Why this design:**
+### Sequence — what happens when you press the hotkey
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Shortcut as macOS Shortcut
+    participant Script as speak-selection.sh
+    participant Client as speakpro CLI
+    participant Daemon as speakpro daemon
+    participant Piper
+    participant afplay
+
+    User->>Shortcut: ⌘⌃S (selection on clipboard)
+    Shortcut->>Script: Run Shell Script
+    Script->>Script: pbpaste
+    Script->>Client: speakpro speak (stdin)
+    Client->>Daemon: {"op":"speak","text":"..."}
+    Daemon->>Daemon: sanitize + split paragraphs
+    Daemon-->>Client: {"ok":true,"queued":N}
+
+    loop for each paragraph
+        Daemon->>Piper: synthesize(text)
+        Piper-->>Daemon: temp WAV
+        Daemon->>afplay: play(WAV)
+        afplay-->>User: 🔊 audio
+        Note over Daemon: SIGSTOP/SIGCONT<br/>handle pause/resume
+        Daemon->>Daemon: cleanup temp WAV
+    end
+```
+
+### Player state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle: daemon start
+    Idle --> Playing: speak()
+    Playing --> Paused: pause (SIGSTOP)
+    Paused --> Playing: resume (SIGCONT)
+    Playing --> Playing: skip → next paragraph
+    Playing --> Idle: stop / queue drained
+    Paused --> Idle: stop
+    Idle --> [*]: shutdown
+```
+
+### Why this design
 
 - **Selection-based capture** — the user picks what's narrated. No fragile screen scraping.
 - **Long-lived daemon** — neural model stays warm; first-paragraph latency is ~1 sec, subsequent paragraphs are immediate.
