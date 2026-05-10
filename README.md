@@ -69,7 +69,7 @@ These are the use cases SpeakPro was built for. If any of these sound like your 
 ## Features
 
 - **System-wide hotkey** — `⌘⌃S` reads the current selection from any Mac app, not just iTerm2.
-- **Smart text cleaning** — strips Markdown code fences, inline code, tool-use XML, ANSI color codes, long URLs, file paths, headings, list bullets, emoji, and lone Unicode surrogates *before* sending to TTS. You won't hear "backtick backtick backtick python."
+- **Markdown-aware text cleaning** — strips ATX & setext headings, list bullets (incl. task checkboxes), horizontal rules, blockquotes, YAML front matter, footnote markers, link/image syntax (keeps the readable text), emphasis & strikethrough, tool-use XML, ANSI color codes, long URLs and file paths, emoji, and lone Unicode surrogates. Code fences are *announced* with their language ("Python code block") instead of read literally. Markdown tables are converted to spoken sentences ("Table with columns Name, Age. Row 1: Name is Alice; Age is 30.") for small tables, or summarized ("table with 12 rows") for large ones. You won't hear "backtick backtick backtick python," "hash hash hash heading," or "pipe pipe pipe."
 - **Pause / resume / skip / stop** via hotkeys or CLI. Real `SIGSTOP`/`SIGCONT` pause — not a fake "wait until queue ends."
 - **Pluggable TTS backends** — ships with macOS `say` and Piper. Drop-in interface for Kokoro, F5-TTS, or any future neural TTS.
 - **Paragraph-level queue** — long answers are spoken one paragraph at a time, so you can `speakpro skip` past the part you don't care about.
