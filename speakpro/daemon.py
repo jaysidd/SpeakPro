@@ -9,11 +9,19 @@ import signal
 import socket
 import sys
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
-from .preprocess import clean, split_paragraphs
+from .preprocess import clean, split_for_speech
 from .tts import make_backend, TTSBackend
+
+
+# Default inter-utterance pauses (seconds). Combined with the natural
+# ~150-250 ms gap from afplay/Piper startup, these produce roughly a
+# half-second pause at sentence ends and ~one second at paragraph ends.
+DEFAULT_SENTENCE_PAUSE = 0.4
+DEFAULT_PARAGRAPH_PAUSE = 0.7
 
 
 SOCKET_PATH = Path(os.environ.get(
@@ -30,10 +38,13 @@ class Player:
     def __init__(self, backend: TTSBackend):
         self.backend = backend
         self.lock = threading.Lock()
-        self.queue: deque[str] = deque()
+        # Queue items: (text, pause_after_seconds)
+        self.queue: deque = deque()
         self.current = None  # Popen
         self.worker: threading.Thread | None = None
         self.paused = False
+        self.sentence_pause = DEFAULT_SENTENCE_PAUSE
+        self.paragraph_pause = DEFAULT_PARAGRAPH_PAUSE
 
     def status(self) -> dict:
         with self.lock:
@@ -45,17 +56,22 @@ class Player:
             }
 
     def enqueue(self, text: str, *, replace: bool = False) -> int:
-        chunks = split_paragraphs(text) or [text.strip()]
-        chunks = [c for c in chunks if c]
+        items = split_for_speech(
+            text,
+            sentence_pause=self.sentence_pause,
+            paragraph_pause=self.paragraph_pause,
+        )
+        if not items:
+            return 0
         with self.lock:
             if replace:
                 self.queue.clear()
                 self._stop_current_locked()
-            self.queue.extend(chunks)
+            self.queue.extend(items)
             if not self.worker or not self.worker.is_alive():
                 self.worker = threading.Thread(target=self._run, daemon=True)
                 self.worker.start()
-        return len(chunks)
+        return len(items)
 
     def _run(self):
         import traceback
@@ -63,14 +79,14 @@ class Player:
             with self.lock:
                 if not self.queue:
                     return
-                text = self.queue.popleft()
+                text, pause_after = self.queue.popleft()
                 try:
                     self.current = self.backend.speak(text)
                     proc = self.current
                 except Exception:
-                    # One bad paragraph must not kill the worker — log and skip.
+                    # One bad sentence must not kill the worker — log and skip.
                     sys.stderr.write(
-                        f"speakpro: skipping paragraph (backend error)\n"
+                        f"speakpro: skipping sentence (backend error)\n"
                         f"{traceback.format_exc()}"
                     )
                     self.current = None
@@ -86,8 +102,15 @@ class Player:
                     os.remove(tmp)
                 except FileNotFoundError:
                     pass
+            # Negative returncode → killed by signal (skip/stop). Don't pad
+            # the gap when the user explicitly asked to move on.
+            killed = proc.returncode is not None and proc.returncode < 0
             with self.lock:
                 self.current = None
+                # Only sleep if there's more in the queue — don't pad the tail.
+                more_queued = bool(self.queue)
+            if pause_after > 0 and more_queued and not killed:
+                time.sleep(pause_after)
 
     def _stop_current_locked(self):
         if self.current and self.current.poll() is None:

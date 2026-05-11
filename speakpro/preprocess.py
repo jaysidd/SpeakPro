@@ -198,3 +198,94 @@ def clean(text):
 
 def split_paragraphs(text):
     return [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+
+
+# --- Sentence splitting (for inserting natural pauses between sentences) ---
+
+# Common abbreviations whose trailing period must NOT end a sentence.
+_ABBREVIATIONS = frozenset({
+    "Mr", "Mrs", "Ms", "Dr", "Prof", "Sr", "Jr", "St",
+    "vs", "etc", "Inc", "Ltd", "Co", "Corp",
+    "Ave", "Blvd", "Rd", "Mt",
+    "eg", "ie",
+})
+
+# Sentence boundary: a sentence-ending punctuation mark, preceded by a letter
+# or closing punctuation (NOT a digit — protects version numbers like v1.0),
+# followed by whitespace and the start of the next sentence.
+_SENTENCE_BOUNDARY = re.compile(
+    r"""(?<=[a-zA-Z"')\]])  # previous char: letter or closing punct
+        ([.!?]+)            # capture sentence-ending punctuation
+        \s+                 # consume whitespace
+        (?=[A-Z"'(\[])      # next: uppercase or opening punct
+    """,
+    re.VERBOSE,
+)
+
+
+def _ends_with_abbreviation(s):
+    """True if `s` ends with a known abbreviation (so the period isn't terminal)."""
+    m = re.search(r"\b([A-Za-z]+)\.\s*[\"')\]]*$", s)
+    if not m:
+        return False
+    word = m.group(1)
+    if word in _ABBREVIATIONS:
+        return True
+    # Single-letter capitals like "U." in "U.S." — likely an abbreviation.
+    if len(word) == 1 and word.isupper():
+        return True
+    return False
+
+
+def split_sentences(paragraph):
+    """Split one paragraph into sentences, guarding against common abbreviations.
+
+    Imperfect by design — over-splitting is fine (a small extra pause is
+    harmless), under-splitting is the problem we're solving.
+    """
+    if not paragraph or not paragraph.strip():
+        return []
+    parts = _SENTENCE_BOUNDARY.split(paragraph)
+    # parts layout: [pre_text, punct1, mid_text, punct2, ..., post_text]
+    # Each sentence i = parts[2i] + parts[2i+1]; trailing parts[-1] (if even index) is final fragment.
+    raw = []
+    for i in range(0, len(parts) - 1, 2):
+        chunk = (parts[i] + parts[i + 1]).strip()
+        if chunk:
+            raw.append(chunk)
+    if len(parts) % 2 == 1:
+        tail = parts[-1].strip()
+        if tail:
+            raw.append(tail)
+    # Merge back across boundaries that landed inside an abbreviation.
+    merged = []
+    for s in raw:
+        if merged and _ends_with_abbreviation(merged[-1]):
+            merged[-1] = merged[-1].rstrip() + " " + s
+        else:
+            merged.append(s)
+    return merged
+
+
+def split_for_speech(text, sentence_pause=0.4, paragraph_pause=0.7):
+    """Return [(sentence, pause_after_seconds), ...] for queueing.
+
+    Last item in the whole text has pause=0 (nothing to pause for).
+    Last sentence in each non-final paragraph gets `paragraph_pause`.
+    Every other sentence gets `sentence_pause`.
+    """
+    paragraphs = split_paragraphs(text) or ([text.strip()] if text.strip() else [])
+    items = []
+    for p_idx, para in enumerate(paragraphs):
+        sentences = split_sentences(para) or [para]
+        last_para = (p_idx == len(paragraphs) - 1)
+        for s_idx, sent in enumerate(sentences):
+            last_sent = (s_idx == len(sentences) - 1)
+            if last_para and last_sent:
+                pause = 0.0
+            elif last_sent:
+                pause = paragraph_pause
+            else:
+                pause = sentence_pause
+            items.append((sent, pause))
+    return items
